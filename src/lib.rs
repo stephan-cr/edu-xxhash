@@ -114,8 +114,9 @@ impl Hasher for XXHash32 {
                 .expect("remaining capacity must be sufficient");
 
             bytes_copied = bytes_to_copy;
+            self.unprocessed_bytes.is_full();
 
-            if self.unprocessed_bytes.len() == 16 {
+            if self.unprocessed_bytes.is_full() {
                 let unprocessed_bytes_stripe: ArrayVec<_, 16> = self
                     .unprocessed_bytes
                     .drain(0..self.unprocessed_bytes.len())
@@ -150,7 +151,7 @@ struct XXHash64 {
     acc: [u64; 4],
     seed: u64,
     total_length: usize,
-    unprocessed_bytes: ArrayVec<u8, 16>,
+    unprocessed_bytes: ArrayVec<u8, 32>,
 }
 
 impl XXHash64 {
@@ -174,6 +175,27 @@ impl XXHash64 {
             unprocessed_bytes: ArrayVec::new(),
         }
     }
+
+    fn round(acc: u64, lane: u64) -> u64 {
+        acc.wrapping_add(lane.wrapping_mul(Self::PRIME64_2))
+            .rotate_left(31)
+            .wrapping_mul(Self::PRIME64_1)
+    }
+
+    fn process_stripe(&mut self, bytes: &[u8]) {
+        let mut lane_iter = bytes.chunks_exact(8);
+
+        let mut index: usize = 0;
+        while let Some(lane) = lane_iter.next() {
+            let lane = u64::from_le_bytes(lane.try_into().expect("8 bytes"));
+            // self.acc[index] = self.acc[index].wrapping_add(lane.wrapping_mul(Self::PRIME64_2));
+            // self.acc[index] = self.acc[index].rotate_left(31);
+            // self.acc[index] = self.acc[index].wrapping_mul(Self::PRIME64_1);
+            self.acc[index] = Self::round(self.acc[index], lane);
+
+            index += 1;
+        }
+    }
 }
 
 impl Default for XXHash64 {
@@ -184,12 +206,112 @@ impl Default for XXHash64 {
 
 impl Hasher for XXHash64 {
     fn finish(&self) -> u64 {
-        todo!()
+        let mut acc = if self.total_length < 32 {
+            // special case: input is less than 32 bytes
+            self.seed.wrapping_add(Self::PRIME64_5)
+        } else {
+            let mut converged_acc = self.acc[0]
+                .rotate_left(1)
+                .wrapping_add(self.acc[1].rotate_left(7))
+                .wrapping_add(self.acc[2].rotate_left(12))
+                .wrapping_add(self.acc[3].rotate_left(18));
+
+            for acc in self.acc {
+                converged_acc ^= Self::round(0, acc);
+                converged_acc = converged_acc
+                    .wrapping_mul(Self::PRIME64_1)
+                    .wrapping_add(Self::PRIME64_4);
+            }
+
+            converged_acc
+        };
+
+        acc += self.total_length as u64;
+
+        // consume remaining input
+        let mut chunk_iter = self.unprocessed_bytes.as_slice().chunks_exact(8);
+
+        while let Some(chunk) = chunk_iter.next() {
+            let lane = u64::from_le_bytes(chunk.try_into().expect("8 bytes"));
+            acc ^= Self::round(0, lane);
+            acc = acc.rotate_left(27).wrapping_mul(Self::PRIME64_1);
+            acc = acc.wrapping_add(Self::PRIME64_4);
+        }
+
+        let mut chunk_iter_single_byte = chunk_iter.remainder().chunks_exact(4);
+
+        while let Some(chunk) = chunk_iter_single_byte.next() {
+            let lane = u32::from_le_bytes(chunk.try_into().expect("4 bytes")) as u64;
+            acc ^= lane.wrapping_mul(Self::PRIME64_1);
+            acc = acc.rotate_left(23).wrapping_mul(Self::PRIME64_2);
+            acc = acc.wrapping_add(Self::PRIME64_3);
+        }
+
+        let mut chunk_iter_single_byte = chunk_iter.remainder().chunks_exact(1);
+
+        while let Some(chunk) = chunk_iter_single_byte.next() {
+            let lane = u8::from_le(chunk[0]) as u64;
+            acc ^= lane.wrapping_mul(Self::PRIME64_5);
+            acc = acc.rotate_left(11).wrapping_mul(Self::PRIME64_1);
+        }
+
+        // final mix (avalanche)
+        acc ^= acc >> 33;
+        acc = acc.wrapping_mul(Self::PRIME64_2);
+        acc ^= acc >> 29;
+        acc = acc.wrapping_mul(Self::PRIME64_3);
+        acc ^= acc >> 32;
+
+        acc
     }
 
     fn write(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+
         self.total_length += bytes.len();
-        todo!()
+
+        // process incomplete stripe from last time
+        let remaining_capacity = self.unprocessed_bytes.remaining_capacity();
+        let mut bytes_copied = 0;
+        if !self.unprocessed_bytes.is_empty() && remaining_capacity > 0 {
+            let bytes_to_copy = bytes.len().min(remaining_capacity);
+            self.unprocessed_bytes
+                .try_extend_from_slice(&bytes[0..bytes_to_copy])
+                .expect("remaining capacity must be sufficient");
+
+            bytes_copied = bytes_to_copy;
+            self.unprocessed_bytes.is_full();
+
+            if self.unprocessed_bytes.is_full() {
+                let unprocessed_bytes_stripe: ArrayVec<_, 32> = self
+                    .unprocessed_bytes
+                    .drain(0..self.unprocessed_bytes.len())
+                    .collect();
+                self.process_stripe(&unprocessed_bytes_stripe);
+            } else {
+                return;
+            }
+        }
+
+        assert_eq!(self.unprocessed_bytes.len(), 0);
+
+        // process remaining bytes, if there are any
+
+        if bytes.len() > bytes_copied {
+            let mut chunk_iter = bytes[bytes_copied..].chunks_exact(32);
+
+            while let Some(chunk) = chunk_iter.next() {
+                self.process_stripe(chunk);
+            }
+
+            // put remaining incomplete stripe to unprocessed_bytes
+            // for next call to write or finish
+            self.unprocessed_bytes
+                .try_extend_from_slice(chunk_iter.remainder())
+                .expect("must fit into self.unprocessed_bytes");
+        }
     }
 }
 
@@ -250,7 +372,8 @@ mod tests {
 
     #[rstest]
     #[case(&[], 0xef46db3751d8e999u64)]
-    #[ignore = "not implemented yet"]
+    #[case(&b"xy"[..], 0xd636cdd32ee68a9fu64)]
+    // #[ignore = "not implemented yet"]
     fn test_xxhash64(#[case] input: &[u8], #[case] expected: u64) {
         let mut xxhash = XXHash64::default();
 
