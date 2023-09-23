@@ -357,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn test_full_stride_followed_by_incomplete_one() {
+    fn test_xxhash32_full_stride_followed_by_incomplete_one() {
         let mut xxhash = XXHash32::default();
 
         let input = &b"abcdefghijklmnop"[..];
@@ -382,5 +382,32 @@ mod tests {
         xxhash.write(&input);
 
         assert_eq!(xxhash.finish(), expected);
+    }
+
+    #[test]
+    fn test_xxhash64_one_byte_at_a_time() {
+        let mut xxhash = XXHash64::default();
+
+        let input = &b"abcdefghijklmnop"[..];
+        assert_eq!(input.len(), 16);
+        for x in input {
+            xxhash.write_u8(*x);
+        }
+
+        assert_eq!(xxhash.finish(), 0x71ce8137ca2dd53du64);
+    }
+
+    #[test]
+    fn test_xxhash64_full_stride_followed_by_incomplete_one() {
+        let mut xxhash = XXHash64::default();
+
+        let input = &b"abcdefghijklmnopabcdefghijklmnop"[..];
+        assert_eq!(input.len(), 32);
+        xxhash.write(input);
+
+        let input = &b"q"[..];
+        xxhash.write(input);
+
+        assert_eq!(xxhash.finish(), 0x85510cf15f44b71eu64);
     }
 }
