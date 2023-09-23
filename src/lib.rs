@@ -1,3 +1,5 @@
+#![warn(rust_2018_idioms)]
+
 use std::hash::Hasher;
 
 use arrayvec::ArrayVec;
@@ -31,16 +33,13 @@ impl XXHash32 {
     }
 
     fn process_stripe(&mut self, bytes: &[u8]) {
-        let mut lane_iter = bytes.chunks_exact(4);
+        let lane_iter = bytes.chunks_exact(4);
 
-        let mut index: usize = 0;
-        while let Some(lane) = lane_iter.next() {
+        for (index, lane) in lane_iter.enumerate() {
             let lane = u32::from_le_bytes(lane.try_into().expect("4 bytes"));
             self.acc[index] = self.acc[index].wrapping_add(lane.wrapping_mul(Self::PRIME32_2));
             self.acc[index] = self.acc[index].rotate_left(13);
             self.acc[index] = self.acc[index].wrapping_mul(Self::PRIME32_1);
-
-            index += 1;
         }
     }
 }
@@ -71,7 +70,7 @@ impl Hasher for XXHash32 {
         // consume remaining input
         let mut chunk_iter = self.unprocessed_bytes.as_slice().chunks_exact(4);
 
-        while let Some(chunk) = chunk_iter.next() {
+        for chunk in chunk_iter.by_ref() {
             let lane = u32::from_le_bytes(chunk.try_into().expect("4 bytes"));
             acc = acc.wrapping_add(lane.wrapping_mul(Self::PRIME32_3));
             acc = acc.rotate_left(17).wrapping_mul(Self::PRIME32_4);
@@ -79,7 +78,7 @@ impl Hasher for XXHash32 {
 
         let mut chunk_iter_single_byte = chunk_iter.remainder().chunks_exact(1);
 
-        while let Some(chunk) = chunk_iter_single_byte.next() {
+        for chunk in chunk_iter_single_byte.by_ref() {
             let lane = u8::from_le(chunk[0]) as u32;
             acc = acc.wrapping_add(lane.wrapping_mul(Self::PRIME32_5));
             acc = acc.rotate_left(11).wrapping_mul(Self::PRIME32_1);
@@ -134,7 +133,7 @@ impl Hasher for XXHash32 {
         if bytes.len() > bytes_copied {
             let mut chunk_iter = bytes[bytes_copied..].chunks_exact(16);
 
-            while let Some(chunk) = chunk_iter.next() {
+            for chunk in chunk_iter.by_ref() {
                 self.process_stripe(chunk);
             }
 
@@ -183,17 +182,14 @@ impl XXHash64 {
     }
 
     fn process_stripe(&mut self, bytes: &[u8]) {
-        let mut lane_iter = bytes.chunks_exact(8);
+        let lane_iter = bytes.chunks_exact(8);
 
-        let mut index: usize = 0;
-        while let Some(lane) = lane_iter.next() {
+        for (index, lane) in lane_iter.enumerate() {
             let lane = u64::from_le_bytes(lane.try_into().expect("8 bytes"));
             // self.acc[index] = self.acc[index].wrapping_add(lane.wrapping_mul(Self::PRIME64_2));
             // self.acc[index] = self.acc[index].rotate_left(31);
             // self.acc[index] = self.acc[index].wrapping_mul(Self::PRIME64_1);
             self.acc[index] = Self::round(self.acc[index], lane);
-
-            index += 1;
         }
     }
 }
@@ -231,7 +227,7 @@ impl Hasher for XXHash64 {
         // consume remaining input
         let mut chunk_iter = self.unprocessed_bytes.as_slice().chunks_exact(8);
 
-        while let Some(chunk) = chunk_iter.next() {
+        for chunk in chunk_iter.by_ref() {
             let lane = u64::from_le_bytes(chunk.try_into().expect("8 bytes"));
             acc ^= Self::round(0, lane);
             acc = acc.rotate_left(27).wrapping_mul(Self::PRIME64_1);
@@ -240,16 +236,16 @@ impl Hasher for XXHash64 {
 
         let mut chunk_iter_four_bytes = chunk_iter.remainder().chunks_exact(4);
 
-        while let Some(chunk) = chunk_iter_four_bytes.next() {
+        for chunk in chunk_iter_four_bytes.by_ref() {
             let lane = u32::from_le_bytes(chunk.try_into().expect("4 bytes")) as u64;
             acc ^= lane.wrapping_mul(Self::PRIME64_1);
             acc = acc.rotate_left(23).wrapping_mul(Self::PRIME64_2);
             acc = acc.wrapping_add(Self::PRIME64_3);
         }
 
-        let mut chunk_iter_single_byte = chunk_iter_four_bytes.remainder().chunks_exact(1);
+        let chunk_iter_single_byte = chunk_iter_four_bytes.remainder().chunks_exact(1);
 
-        while let Some(chunk) = chunk_iter_single_byte.next() {
+        for chunk in chunk_iter_single_byte {
             let lane = u8::from_le(chunk[0]) as u64;
             acc ^= lane.wrapping_mul(Self::PRIME64_5);
             acc = acc.rotate_left(11).wrapping_mul(Self::PRIME64_1);
@@ -302,7 +298,7 @@ impl Hasher for XXHash64 {
         if bytes.len() > bytes_copied {
             let mut chunk_iter = bytes[bytes_copied..].chunks_exact(32);
 
-            while let Some(chunk) = chunk_iter.next() {
+            for chunk in chunk_iter.by_ref() {
                 self.process_stripe(chunk);
             }
 
