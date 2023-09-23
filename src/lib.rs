@@ -238,16 +238,16 @@ impl Hasher for XXHash64 {
             acc = acc.wrapping_add(Self::PRIME64_4);
         }
 
-        let mut chunk_iter_single_byte = chunk_iter.remainder().chunks_exact(4);
+        let mut chunk_iter_four_bytes = chunk_iter.remainder().chunks_exact(4);
 
-        while let Some(chunk) = chunk_iter_single_byte.next() {
+        while let Some(chunk) = chunk_iter_four_bytes.next() {
             let lane = u32::from_le_bytes(chunk.try_into().expect("4 bytes")) as u64;
             acc ^= lane.wrapping_mul(Self::PRIME64_1);
             acc = acc.rotate_left(23).wrapping_mul(Self::PRIME64_2);
             acc = acc.wrapping_add(Self::PRIME64_3);
         }
 
-        let mut chunk_iter_single_byte = chunk_iter.remainder().chunks_exact(1);
+        let mut chunk_iter_single_byte = chunk_iter_four_bytes.remainder().chunks_exact(1);
 
         while let Some(chunk) = chunk_iter_single_byte.next() {
             let lane = u8::from_le(chunk[0]) as u64;
@@ -373,6 +373,8 @@ mod tests {
     #[rstest]
     #[case(&[], 0xef46db3751d8e999u64)]
     #[case(&b"xy"[..], 0xd636cdd32ee68a9fu64)]
+    #[case(&b"abcd"[..], 0xde0327b0d25d92ccu64)]
+    #[case(&b"abcdefghijklmnop"[..], 0x71ce8137ca2dd53du64)]
     // #[ignore = "not implemented yet"]
     fn test_xxhash64(#[case] input: &[u8], #[case] expected: u64) {
         let mut xxhash = XXHash64::default();
